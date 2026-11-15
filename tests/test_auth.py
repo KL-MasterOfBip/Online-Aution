@@ -148,6 +148,62 @@ class AuthTests(unittest.TestCase):
         self.assertEqual(self.send(b, 'QUIT extra'), 'ERROR Invalid command or arguments')
         self.assertEqual(self.send(b, 'PING'), 'OK PONG')
 
+    def test_room_prompts_validation_join_by_id_and_name_response(self):
+        peer = self.connect()
+        self.assertEqual(self.send(peer, 'CREATE_ROOM'), 'ERROR Not logged in')
+        self.assertEqual(self.send(peer, 'JOIN_ROOM'), 'ERROR Not logged in')
+        user = self.name()
+        self.register(peer, user)
+        self.assertEqual(self.send(peer, f'LOGIN {user} secret-pass'), 'OK Login successful')
+        room = self.name()
+        self.assertEqual(self.send(peer, 'CREATE_ROOM'), 'Room name:')
+        for invalid in ('', 'a' * 50, 'two words'):
+            self.assertTrue(self.send(peer, invalid).startswith('ERROR Room name'))
+            self.assertEqual(peer[1].readline(), b'Room name:\n')
+        created = self.send(peer, room)
+        self.assertTrue(created.startswith('OK ROOM_CREATED'))
+        room_id = created.split()[-1]
+        self.assertEqual(self.send(peer, 'CREATE_ROOM'), 'Room name:')
+        self.assertEqual(self.send(peer, room), 'ERROR Room already exists')
+        self.assertEqual(peer[1].readline(), b'Room name:\n')
+        self.assertTrue(self.send(peer, self.name()).startswith('OK ROOM_CREATED'))
+        self.assertEqual(self.send(peer, 'JOIN_ROOM'), 'Room ID:')
+        for invalid in ('', 'abc', '0', '-1', '2147483648', '1 extra'):
+            self.assertEqual(self.send(peer, invalid), 'ERROR Invalid room ID')
+            self.assertEqual(peer[1].readline(), b'Room ID:\n')
+        self.assertEqual(self.send(peer, '2147483647'), 'ERROR Room not found')
+        self.assertEqual(peer[1].readline(), b'Room ID:\n')
+        self.assertEqual(self.send(peer, room_id), 'OK JOINED_ROOM ' + room)
+        self.assertEqual(self.send(peer, 'JOIN_ROOM'), 'ERROR Already in a room')
+        self.assertEqual(self.send(peer, 'LEAVE_ROOM'), 'OK LEFT_ROOM')
+        self.assertEqual(self.send(peer, 'JOIN_ROOM ' + room_id), 'OK JOINED_ROOM ' + room)
+
+    def test_room_terminal_prompts_echo_and_independent_clients(self):
+        process, master, slave = self.start_terminal()
+        self.read_until(master, b'OK Connected')
+        name = self.name()
+        os.write(master, (f'REGISTER {name} pass\nLOGIN {name} pass\n').encode())
+        self.read_until(master, b'OK Login successful')
+        os.write(master, b'CREATE_ROOM\n')
+        self.read_until(master, b'Room name: ')
+        self.assertTrue(termios.tcgetattr(slave)[3] & termios.ECHO)
+        other = self.connect()
+        self.assertEqual(self.send(other, 'PING'), 'OK PONG')
+        room = self.name()
+        os.write(master, (room + '\n').encode())
+        output = self.read_until(master, b'OK ROOM_CREATED')
+        # Finish reading the response if TCP/PTY splits it before the ID.
+        while b'\n' not in output[output.index(b'OK ROOM_CREATED'):]:
+            output += os.read(master, 4096)
+        room_id = output.split(b'OK ROOM_CREATED', 1)[1].splitlines()[0].split()[-1]
+        os.write(master, b'JOIN_ROOM\n')
+        self.read_until(master, b'Room ID: ')
+        self.assertTrue(termios.tcgetattr(slave)[3] & termios.ECHO)
+        os.write(master, room_id + b'\n')
+        self.read_until(master, ('OK JOINED_ROOM ' + room).encode())
+        os.write(master, b'QUIT\n')
+        self.assertEqual(process.wait(timeout=3), 0)
+
     def start_terminal(self):
         master, slave = pty.openpty()
         process = subprocess.Popen([str(self.work / 'client'), '127.0.0.1', str(self.port)],

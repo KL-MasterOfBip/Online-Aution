@@ -10,6 +10,8 @@
 #include <sys/select.h>
 #include <arpa/inet.h>
 
+#define SERVER_IP "127.0.0.1"
+#define SERVER_PORT 8080
 #define BUFFER_SIZE 4096
 
 static struct termios saved_terminal;
@@ -68,11 +70,13 @@ int display_response(char *line) {
                           strcmp(line, "Password:") == 0;
     int username_prompt = strcmp(line, "New username:") == 0 ||
                           strcmp(line, "Username:") == 0;
+    int room_prompt = strcmp(line, "Room name:") == 0 ||
+                      strcmp(line, "Room ID:") == 0;
     if (password_prompt && hide_password() < 0) {
         perror("Cannot hide password");
         return -1;
     }
-    if (password_prompt || username_prompt) {
+    if (password_prompt || username_prompt || room_prompt) {
         printf("%s ", line);
     }
     else {
@@ -83,8 +87,12 @@ int display_response(char *line) {
 }
 
 int main(int argc, char *argv[]) {
-    const char *host = argc > 1 ? argv[1] : "127.0.0.1";
-    long port = 8080;
+    // Lay dia chi server, mac dinh la 127.0.0.1:8080.
+    const char *host = SERVER_IP;
+    long port = SERVER_PORT;
+    if (argc > 1) {
+        host = argv[1];
+    }
     if (argc > 3) {
         fprintf(stderr, "Usage: %s [IPv4 address] [port]\n", argv[0]);
         return 1;
@@ -99,7 +107,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    atexit(restore_terminal);
+    // Nhan tin hieu de thoat vong lap va khoi phuc terminal.
     struct sigaction action;
     memset(&action, 0, sizeof(action));
     action.sa_handler = handle_signal;
@@ -110,43 +118,49 @@ int main(int argc, char *argv[]) {
     sigaction(SIGQUIT, &action, NULL);
     signal(SIGPIPE, SIG_IGN);
 
-    int socket_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (socket_fd < 0) {
+    // Tao socket TCP.
+    int client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (client < 0) {
         perror("socket");
         return 1;
     }
-    if (socket_fd >= FD_SETSIZE) {
+    if (client >= FD_SETSIZE) {
         fprintf(stderr, "Socket descriptor exceeds select limit\n");
-        close(socket_fd);
+        close(client);
         return 1;
     }
-    struct sockaddr_in address;
-    memset(&address, 0, sizeof(address));
-    address.sin_family = AF_INET;
-    address.sin_port = htons((unsigned short)port);
-    if (inet_pton(AF_INET, host, &address.sin_addr) != 1) {
+    // Khai bao dia chi server.
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((unsigned short)port);
+    if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) {
         fprintf(stderr, "Invalid IPv4 address\n");
-        close(socket_fd);
+        close(client);
         return 1;
     }
-    if (connect(socket_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
+    // Ket noi den server.
+    if (connect(client, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
         perror("connect");
-        close(socket_fd);
+        close(client);
         return 1;
     }
 
+    // Chuan bi buffer va theo doi ban phim cung socket bang select().
+    fd_set fdread;
     char response[BUFFER_SIZE];
     size_t response_length = 0;
     int stdin_open = 1;
     int result = 0;
     while (!interrupted) {
-        fd_set read_fds;
-        FD_ZERO(&read_fds);
-        FD_SET(socket_fd, &read_fds);
+        // select() thay doi fd_set, can khoi tao lai sau moi vong lap.
+        FD_ZERO(&fdread);
+        FD_SET(client, &fdread);
         if (stdin_open) {
-            FD_SET(STDIN_FILENO, &read_fds);
+            FD_SET(STDIN_FILENO, &fdread);
         }
-        int ready = select(socket_fd + 1, &read_fds, NULL, NULL, NULL);
+        // Cho du lieu tu server hoac ban phim.
+        int ready = select(client + 1, &fdread, NULL, NULL, NULL);
         if (ready < 0) {
             if (errno == EINTR) {
                 continue;
@@ -155,9 +169,10 @@ int main(int argc, char *argv[]) {
             result = 1;
             break;
         }
-        if (FD_ISSET(socket_fd, &read_fds)) {
+        // Nhan tu server truoc de hien prompt va an password kip thoi.
+        if (FD_ISSET(client, &fdread)) {
             char incoming[BUFFER_SIZE];
-            ssize_t received = recv(socket_fd, incoming, sizeof(incoming), 0);
+            ssize_t received = recv(client, incoming, sizeof(incoming), 0);
             if (received < 0 && errno == EINTR) {
                 continue;
             }
@@ -168,12 +183,13 @@ int main(int argc, char *argv[]) {
                 }
                 break;
             }
+            // TCP co the tach/gop dong, giu phan chua nhan du trong buffer.
             for (ssize_t i = 0; i < received; i++) {
                 if (incoming[i] == '\n') {
                     response[response_length] = '\0';
                     if (display_response(response) < 0) {
                         result = 1;
-                        goto done;
+                        break;
                     }
                     response_length = 0;
                 }
@@ -183,12 +199,18 @@ int main(int argc, char *argv[]) {
                 else {
                     fprintf(stderr, "Server response too long\n");
                     result = 1;
-                    goto done;
+                    break;
                 }
             }
         }
-        if (!interrupted && stdin_open && FD_ISSET(STDIN_FILENO, &read_fds)) {
+        if (result != 0) {
+            break;
+        }
+
+        // Doc ban phim va gui du lieu den server.
+        if (!interrupted && stdin_open && FD_ISSET(STDIN_FILENO, &fdread)) {
             char input[BUFFER_SIZE];
+            // Dung read() de khong co buffer stdin doc truoc du lieu cua select().
             ssize_t length = read(STDIN_FILENO, input, sizeof(input));
             if (length < 0 && errno == EINTR) {
                 continue;
@@ -201,11 +223,12 @@ int main(int argc, char *argv[]) {
                     result = 1;
                     break;
                 }
-                shutdown(socket_fd, SHUT_WR);
+                // Ctrl+D: ngung gui, tiep tuc nhan phan hoi con lai.
+                shutdown(client, SHUT_WR);
                 stdin_open = 0;
             }
             else {
-                int sent = send_all(socket_fd, input, (size_t)length);
+                int sent = send_all(client, input, (size_t)length);
                 memset(input, 0, sizeof(input));
                 if (sent < 0) {
                     if (!interrupted) {
@@ -218,8 +241,8 @@ int main(int argc, char *argv[]) {
         }
     }
 
-done:
+    // Ket thuc: khoi phuc hien thi ban phim roi dong socket.
     restore_terminal();
-    close(socket_fd);
+    close(client);
     return result;
 }

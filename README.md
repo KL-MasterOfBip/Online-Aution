@@ -77,9 +77,9 @@ Ví dụ nội dung file log (thời gian chỉ minh họa định dạng):
 | `REGISTER` hoặc `REGISTER <username> <password>` | Đăng ký tài khoản (chỉ guest) | `OK Account registered` |
 | `LOGIN` hoặc `LOGIN <username> <password>` | Đăng nhập | `OK Login successful` |
 | `LOGOUT` | Đăng xuất (tự động rời phòng nếu đang ở trong phòng) | `OK Logout successful` |
-| `CREATE_ROOM <ten_phong>` | Tạo phòng đấu giá | `OK ROOM_CREATED <id>` |
+| `CREATE_ROOM` / `CREATE_ROOM <ten_phong>` | Tạo phòng đấu giá | `OK ROOM_CREATED <id>` |
 | `LIST_ROOMS` | Liệt kê các phòng | Danh sách phòng, kết thúc bằng `END_ROOM_LIST` |
-| `JOIN_ROOM <room_id>` | Tham gia phòng | `OK JOINED_ROOM <id>` |
+| `JOIN_ROOM` / `JOIN_ROOM <room_id>` | Tham gia phòng | `OK JOINED_ROOM <ten_phong>` |
 | `LEAVE_ROOM` | Rời phòng hiện tại | `OK LEFT_ROOM` |
 | `QUIT` | Kết thúc phiên làm việc | `OK Goodbye` |
 
@@ -205,6 +205,22 @@ ngắt kết nối, Ctrl+C hoặc Ctrl+D. Username hiển thị bình thường.
 - `nc` vẫn dùng được để thử giao thức, nhưng không tự ẩn password. Dùng `./client` để nhập password ẩn.
 - Tài khoản vẫn chỉ lưu trong RAM, sẽ mất khi restart server.
 
+Luồng phòng tương tác (cần đăng nhập):
+
+```text
+CREATE_ROOM
+Room name: Phong1
+OK ROOM_CREATED ID:  1
+JOIN_ROOM
+Room ID: 1
+OK JOINED_ROOM Phong1
+```
+
+Tên phòng giữ giới hạn 1–49 byte, không có khoảng trắng. Tên trùng hoặc dữ liệu
+không hợp lệ sẽ báo lỗi rồi hỏi lại. JOIN_ROOM vẫn tra cứu bằng ID, phản hồi thành
+công hiển thị tên phòng. Client hiển thị các bước nhập này bình thường, không ẩn.
+Dạng lệnh một dòng vẫn được hỗ trợ. Bộ test hiện tại: 10/10 PASS, gồm cả luồng phòng.
+
 Kiểm thử tích hợp (GCC, Python 3, Linux/WSL; không cần thư viện Python ngoài):
 
 ```bash
@@ -310,7 +326,7 @@ Chi tiết từng bước nằm trong `TONG_KET_COMMIT_3.md`.
 | TC01 | Tạo phòng hợp lệ | `OK ROOM_CREATED <id>` | Đạt (smoke test) |
 | TC02 | Tạo phòng trùng tên | `ERROR Room already exists` | Chưa chạy |
 | TC03 | Liệt kê phòng | Danh sách phòng và `END_ROOM_LIST` | Đạt (smoke test) |
-| TC04 | Tham gia phòng hợp lệ | `OK JOINED_ROOM <id>`, số thành viên tăng 1 | Đạt (smoke test) |
+| TC04 | Tham gia phòng hợp lệ | `OK JOINED_ROOM <ten_phong>`, số thành viên tăng 1 | Đạt (smoke test) |
 | TC05 | Tham gia phòng thứ hai khi đang ở phòng 1 | `ERROR Already in a room` | Đạt (smoke test) |
 | TC06 | Rời phòng | `OK LEFT_ROOM`, số thành viên giảm 1 | Đạt (smoke test) |
 | TC07 | Rời phòng 1 rồi tham gia phòng 2 | Tham gia thành công | Chưa chạy |

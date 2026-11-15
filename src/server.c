@@ -33,7 +33,9 @@ typedef enum {
     REGISTER_USERNAME,
     REGISTER_PASSWORD,
     LOGIN_USERNAME,
-    LOGIN_PASSWORD
+    LOGIN_PASSWORD,
+    CREATE_ROOM_NAME,
+    JOIN_ROOM_ID
 } InputState;
 
 typedef struct {
@@ -296,7 +298,7 @@ void create_room(int client_index, const char *room_name) {
               room->room_id, room->room_name, room->owner);
 
     char response[128];
-    snprintf(response, sizeof(response), "OK ROOM_CREATED %d\n", room->room_id);
+    snprintf(response, sizeof(response), "OK ROOM_CREATED ID:  %d\n", room->room_id);
     send_message(client->socket_fd, response);
 }
 
@@ -356,7 +358,8 @@ void join_room(int client_index, int room_id) {
               room_id, rooms[room_index].member_count);
 
     char response[128];
-    snprintf(response, sizeof(response), "OK JOINED_ROOM %d\n", room_id);
+    snprintf(response, sizeof(response), "OK JOINED_ROOM %s\n",
+             rooms[room_index].room_name);
     send_message(client->socket_fd, response);
 }
 
@@ -476,6 +479,54 @@ void handle_auth_input(int client_index, const char *input) {
     memset(client->pending_username, 0, sizeof(client->pending_username));
 }
 
+/* ID phong phai la so nguyen duong trong pham vi int. */
+int parse_room_id(const char *input) {
+    char *end = NULL;
+    errno = 0;
+    long room_id = strtol(input, &end, 10);
+    if (errno != 0 || input[0] == '\0' || *end != '\0' ||
+        room_id <= 0 || room_id > 2147483647L) {
+        return -1;
+    }
+    return (int)room_id;
+}
+
+/* Giu buoc nhap hien tai neu ten phong hoac ID chua hop le. */
+void handle_room_input(int client_index, const char *input) {
+    Client *client = &clients[client_index];
+    int socket_fd = client->socket_fd;
+
+    if (client->input_state == CREATE_ROOM_NAME) {
+        if (!valid_auth_input(input, ROOM_NAME_SIZE)) {
+            send_message(socket_fd, "ERROR Room name must be 1-49 characters without whitespace\n");
+            send_message(socket_fd, "Room name:\n");
+            return;
+        }
+        if (find_room_by_name(input) >= 0) {
+            send_message(socket_fd, "ERROR Room already exists\n");
+            send_message(socket_fd, "Room name:\n");
+            return;
+        }
+        client->input_state = INPUT_COMMAND;
+        create_room(client_index, input);
+    }
+    else {
+        int room_id = parse_room_id(input);
+        if (room_id < 0) {
+            send_message(socket_fd, "ERROR Invalid room ID\n");
+            send_message(socket_fd, "Room ID:\n");
+            return;
+        }
+        if (find_room_by_id(room_id) < 0) {
+            send_message(socket_fd, "ERROR Room not found\n");
+            send_message(socket_fd, "Room ID:\n");
+            return;
+        }
+        client->input_state = INPUT_COMMAND;
+        join_room(client_index, room_id);
+    }
+}
+
 void handle_command(int client_index, char *command) {
     int socket_fd = clients[client_index].socket_fd;
     char *tokens[4];
@@ -483,6 +534,11 @@ void handle_command(int client_index, char *command) {
 
     command[strcspn(command, "\r\n")] = '\0';
 
+    if (clients[client_index].input_state == CREATE_ROOM_NAME ||
+        clients[client_index].input_state == JOIN_ROOM_ID) {
+        handle_room_input(client_index, command);
+        return;
+    }
     if (clients[client_index].input_state != INPUT_COMMAND) {
         handle_auth_input(client_index, command);
         return;
@@ -551,6 +607,21 @@ void handle_command(int client_index, char *command) {
     else if (strcmp(tokens[0], "LOGOUT") == 0 && count == 1) {
         logout_user(client_index);
     }
+    else if ((strcmp(tokens[0], "CREATE_ROOM") == 0 ||
+              strcmp(tokens[0], "JOIN_ROOM") == 0) && count == 1) {
+        Client *client = &clients[client_index];
+        int creating = strcmp(tokens[0], "CREATE_ROOM") == 0;
+        if (client->user_index < 0) {
+            send_message(socket_fd, "ERROR Not logged in\n");
+            return;
+        }
+        if (!creating && client->current_room_id >= 0) {
+            send_message(socket_fd, "ERROR Already in a room\n");
+            return;
+        }
+        client->input_state = creating ? CREATE_ROOM_NAME : JOIN_ROOM_ID;
+        send_message(socket_fd, creating ? "Room name:\n" : "Room ID:\n");
+    }
     else if (strcmp(tokens[0], "CREATE_ROOM") == 0 && count == 2) {
         if (strlen(tokens[1]) >= ROOM_NAME_SIZE) {
             send_message(socket_fd, "ERROR Room name is too long\n");
@@ -562,12 +633,8 @@ void handle_command(int client_index, char *command) {
         list_rooms(client_index);
     }
     else if (strcmp(tokens[0], "JOIN_ROOM") == 0 && count == 2) {
-        char *end = NULL;
-        errno = 0;
-        long room_id = strtol(tokens[1], &end, 10);
-
-        if (errno != 0 || tokens[1][0] == '\0' || *end != '\0' ||
-            room_id <= 0 || room_id > 2147483647L) {
+        int room_id = parse_room_id(tokens[1]);
+        if (room_id < 0) {
             send_message(socket_fd, "ERROR Invalid room ID\n");
             return;
         }
