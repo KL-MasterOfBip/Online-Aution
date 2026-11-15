@@ -28,12 +28,22 @@
 #define MAX_ROOMS 100
 #define ROOM_NAME_SIZE 50
 
+typedef enum {
+    INPUT_COMMAND,
+    REGISTER_USERNAME,
+    REGISTER_PASSWORD,
+    LOGIN_USERNAME,
+    LOGIN_PASSWORD
+} InputState;
+
 typedef struct {
     int socket_fd;
     char buffer[BUFFER_SIZE];
     int length;
     int user_index;       /* -1: client chua dang nhap */
     int current_room_id;  /* -1: client chua tham gia phong nao */
+    InputState input_state;
+    char pending_username[USERNAME_SIZE];
 } Client;
 
 typedef struct {
@@ -403,12 +413,80 @@ int split_tokens(char *command, char *tokens[], int max_tokens) {
     return count;
 }
 
+/* Username va password khong chua khoang trang, giong giao thuc lenh cu. */
+int valid_auth_input(const char *text, size_t limit) {
+    size_t length = strlen(text);
+    if (length == 0 || length >= limit) {
+        return 0;
+    }
+    for (size_t i = 0; i < length; i++) {
+        if (isspace((unsigned char)text[i])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Moi client co buoc nhap rieng; khong cho mot client chan cac client khac. */
+void handle_auth_input(int client_index, const char *input) {
+    Client *client = &clients[client_index];
+    int socket_fd = client->socket_fd;
+    InputState state = client->input_state;
+    int registering = state == REGISTER_USERNAME || state == REGISTER_PASSWORD;
+
+    if (state == REGISTER_USERNAME || state == LOGIN_USERNAME) {
+        if (!valid_auth_input(input, USERNAME_SIZE)) {
+            send_message(socket_fd, "ERROR Username must be 1-31 characters without whitespace\n");
+            send_message(socket_fd, registering ? "New username:\n" : "Username:\n");
+            return;
+        }
+        if (registering && find_user(input) >= 0) {
+            send_message(socket_fd, "ERROR Username already exists\n");
+            send_message(socket_fd, "New username:\n");
+            return;
+        }
+        snprintf(client->pending_username, sizeof(client->pending_username), "%s", input);
+        client->input_state = registering ? REGISTER_PASSWORD : LOGIN_PASSWORD;
+        send_message(socket_fd, registering ? "New password:\n" : "Password:\n");
+        return;
+    }
+
+    if (!valid_auth_input(input, PASSWORD_SIZE)) {
+        send_message(socket_fd, "ERROR Password must be 1-63 characters without whitespace\n");
+        send_message(socket_fd, registering ? "New password:\n" : "Password:\n");
+        return;
+    }
+
+    /* Client khac co the vua dang ky ten nay trong luc cho nhap password. */
+    if (registering && find_user(client->pending_username) >= 0) {
+        client->pending_username[0] = '\0';
+        client->input_state = REGISTER_USERNAME;
+        send_message(socket_fd, "ERROR Username already exists\n");
+        send_message(socket_fd, "New username:\n");
+        return;
+    }
+
+    client->input_state = INPUT_COMMAND;
+    if (registering) {
+        register_user(client_index, client->pending_username, input);
+    }
+    else {
+        login_user(client_index, client->pending_username, input);
+    }
+    memset(client->pending_username, 0, sizeof(client->pending_username));
+}
+
 void handle_command(int client_index, char *command) {
     int socket_fd = clients[client_index].socket_fd;
     char *tokens[4];
     char response[RESPONSE_SIZE];
 
     command[strcspn(command, "\r\n")] = '\0';
+
+    if (clients[client_index].input_state != INPUT_COMMAND) {
+        handle_auth_input(client_index, command);
+        return;
+    }
 
     int count = split_tokens(command, tokens, 4);
 
@@ -417,7 +495,26 @@ void handle_command(int client_index, char *command) {
         return;
     }
 
-    if (strcmp(tokens[0], "PING") == 0 && count == 1) {
+    /* Chi ghi ten lenh, khong ghi username/password trong luong hoi dap. */
+    log_event("COMMAND_RECEIVED fd=%d command=%s", socket_fd, tokens[0]);
+
+    if ((strcmp(tokens[0], "REGISTER") == 0 ||
+         strcmp(tokens[0], "LOGIN") == 0) && count == 1) {
+        int registering = strcmp(tokens[0], "REGISTER") == 0;
+        if (clients[client_index].user_index >= 0) {
+            send_message(socket_fd, registering
+                         ? "ERROR Cannot register while logged in\n"
+                         : "ERROR Already logged in\n");
+            return;
+        }
+        if (registering && user_count >= MAX_USERS) {
+            send_message(socket_fd, "ERROR User database is full\n");
+            return;
+        }
+        clients[client_index].input_state = registering ? REGISTER_USERNAME : LOGIN_USERNAME;
+        send_message(socket_fd, registering ? "New username:\n" : "Username:\n");
+    }
+    else if (strcmp(tokens[0], "PING") == 0 && count == 1) {
         send_message(socket_fd, "OK PONG\n");
     }
     else if (strcmp(tokens[0], "HELP") == 0 && count == 1) {
@@ -525,6 +622,8 @@ void close_client(int index) {
         clients[index].length = 0;
         clients[index].user_index = -1;
         clients[index].current_room_id = -1;
+        clients[index].input_state = INPUT_COMMAND;
+        memset(clients[index].pending_username, 0, sizeof(clients[index].pending_username));
     }
 }
 
@@ -540,6 +639,8 @@ int main(void) {
         clients[i].length = 0;
         clients[i].user_index = -1;
         clients[i].current_room_id = -1;
+        clients[i].input_state = INPUT_COMMAND;
+        clients[i].pending_username[0] = '\0';
     }
 
     memset(rooms, 0, sizeof(rooms));
@@ -621,6 +722,8 @@ int main(void) {
                         clients[i].length = 0;
                         clients[i].user_index = -1;
                         clients[i].current_room_id = -1;
+                        clients[i].input_state = INPUT_COMMAND;
+                        clients[i].pending_username[0] = '\0';
 
                         send_message(client_fd,
                                      "OK Connected to auction server\n");
@@ -659,22 +762,16 @@ int main(void) {
 
                 if (ch == '\n') {
                     clients[i].buffer[clients[i].length] = '\0';
-                    char command_name[32] = {0};
-                    size_t command_pos = 0;
-                    while (clients[i].buffer[command_pos] != '\0' &&
-                           !isspace((unsigned char)clients[i].buffer[command_pos]) &&
-                           command_pos < sizeof(command_name) - 1) {
-                        command_name[command_pos] = clients[i].buffer[command_pos];
-                        command_pos++;
+                    /* Chi QUIT dung cu phap o che do lenh moi dong ket noi. */
+                    char *line = clients[i].buffer;
+                    while (isspace((unsigned char)*line)) {
+                        line++;
                     }
-                    if (command_name[0] != '\0') {
-                        log_event("COMMAND_RECEIVED fd=%d command=%s",
-                                  client_fd, command_name);
-                    }
+                    int should_close = clients[i].input_state == INPUT_COMMAND &&
+                        strncmp(line, "QUIT", 4) == 0 &&
+                        strspn(line + 4, " \t\r\v\f") == strlen(line + 4);
                     handle_command(i, clients[i].buffer);
-
-                    int should_close =
-                        strcmp(clients[i].buffer, "QUIT") == 0;
+                    memset(clients[i].buffer, 0, sizeof(clients[i].buffer));
 
                     clients[i].length = 0;
 

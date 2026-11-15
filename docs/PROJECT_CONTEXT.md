@@ -129,3 +129,27 @@ Sau mỗi buổi làm việc, cập nhật:
 
 Không tự đánh dấu chức năng là hoàn thành chỉ vì đã viết code; phải có cách kiểm tra
 và kết quả chạy thực tế.
+
+
+## 10. Cập nhật ngày 16/11/2026 — luồng tài khoản tương tác
+
+- Source hiện có TCP/select, tài khoản/session, phòng và logger; mục 8 phía trên
+  là mốc ban đầu, không còn phản ánh đầy đủ tiến độ hiện tại.
+- `REGISTER` hỏi `New username:` rồi `New password:`; username trùng được hỏi lại.
+- `LOGIN` hỏi `Username:` rồi `Password:`; chỉ guest bắt đầu các luồng này.
+- Server giữ trạng thái nhập riêng từng client và không log các dòng dữ liệu xác thực.
+- Thêm `src/client.c`: client TCP/select, dùng termios ẩn password, khôi phục echo
+  sau nhập, Ctrl+C, Ctrl+D hoặc mất kết nối. Dùng `./client` để có password ẩn;
+  netcat không có chức năng này. Dạng lệnh chứa cả username/password vẫn được hỗ trợ.
+- Đã cập nhật Makefile, README, hướng dẫn test Commit 3 và ignore binary `/client`.
+- Kiểm tra thực tế: build server/client với `-std=c11 -Wall -Wextra -Wpedantic`
+  không có cảnh báo; `python3 tests/test_auth.py`: 8/8 PASS, gồm TCP và PTY.
+- Điều chỉnh đóng kết nối: chỉ `QUIT` hợp lệ ở chế độ lệnh mới đóng, không đóng
+  khi password là `QUIT`; `QUIT extra` báo lỗi và giữ kết nối.
+- Chưa có lưu tài khoản/phòng bền vững, vật phẩm, đặt giá, mua ngay hay timer đấu giá.
+- Lecture note tham chiếu: `docs/IT4062_ThuchanhLapTrinhMang_LectureNotes_1.pdf`
+  (đang ignore). Bám mẫu TCP và select ở mục 2.3/3.5: C dùng Socket API trực tiếp,
+  quản lý client bằng mảng/struct, vòng lặp rõ ràng, hàm theo nhiệm vụ và chú thích
+  tiếng Việt ngắn; giữ kiến trúc select hiện có.
+- Chưa tạo commit cho thay đổi này. Việc tiếp theo theo lộ trình là quản lý vật phẩm;
+  lưu trữ tài khoản chỉ triển khai khi được yêu cầu.

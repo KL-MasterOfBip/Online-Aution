@@ -74,8 +74,8 @@ Ví dụ nội dung file log (thời gian chỉ minh họa định dạng):
 | --- | --- | --- |
 | `PING` | Kiểm tra kết nối | `OK PONG` |
 | `HELP` | Danh sách lệnh | `OK Commands: ...` (danh sách các lệnh đang hỗ trợ) |
-| `REGISTER <username> <password>` | Đăng ký tài khoản | `OK Account registered` |
-| `LOGIN <username> <password>` | Đăng nhập | `OK Login successful` |
+| `REGISTER` hoặc `REGISTER <username> <password>` | Đăng ký tài khoản (chỉ guest) | `OK Account registered` |
+| `LOGIN` hoặc `LOGIN <username> <password>` | Đăng nhập | `OK Login successful` |
 | `LOGOUT` | Đăng xuất (tự động rời phòng nếu đang ở trong phòng) | `OK Logout successful` |
 | `CREATE_ROOM <ten_phong>` | Tạo phòng đấu giá | `OK ROOM_CREATED <id>` |
 | `LIST_ROOMS` | Liệt kê các phòng | Danh sách phòng, kết thúc bằng `END_ROOM_LIST` |
@@ -94,7 +94,8 @@ Ví dụ nội dung file log (thời gian chỉ minh họa định dạng):
 | Username đã tồn tại | `ERROR Username already exists` |
 | Username hoặc password quá dài | `ERROR Username or password is too long` |
 | Sai username hoặc password | `ERROR Invalid username or password` |
-| Client đã đăng nhập mà gửi `LOGIN` hoặc `REGISTER` | `ERROR Already logged in` |
+| Client đã đăng nhập mà gửi `LOGIN` | `ERROR Already logged in` |
+| Client đã đăng nhập mà gửi `REGISTER` | `ERROR Cannot register while logged in` |
 | Tài khoản đang đăng nhập ở kết nối khác | `ERROR Account already logged in` |
 | `LOGOUT`, `CREATE_ROOM`, `JOIN_ROOM`, `LEAVE_ROOM` khi chưa đăng nhập | `ERROR Not logged in` |
 | Tên phòng đã tồn tại | `ERROR Room already exists` |
@@ -139,6 +140,7 @@ Hoặc biên dịch trực tiếp:
 
 ```bash
 gcc -Wall -Wextra -std=c11 -g src/server.c -o server
+gcc -Wall -Wextra -std=c11 -g src/client.c -o client
 ```
 
 ## Chạy server
@@ -149,7 +151,72 @@ gcc -Wall -Wextra -std=c11 -g src/server.c -o server
 
 Server lắng nghe tại cổng `8080`.
 
-## Kiểm tra server
+## Đăng ký và đăng nhập tương tác
+
+`make` biên dịch cả `server` và client terminal viết bằng C. Khi cập nhật source,
+dừng server cũ bằng Ctrl+C, chạy `make`, rồi khởi động lại server.
+
+Terminal 1:
+
+```bash
+./server
+```
+
+Terminal 2:
+
+```bash
+./client
+# Hoặc chỉ định IPv4 và cổng:
+./client 127.0.0.1 8080
+```
+
+Nhập `REGISTER` hoặc `LOGIN` viết hoa, rồi nhấn Enter. Ví dụ đăng ký:
+
+```text
+REGISTER
+New username: user1
+New password:
+OK Account registered
+```
+
+Nếu username đã tồn tại, server báo `ERROR Username already exists` rồi hỏi lại
+`New username:`. Đăng ký thành công chưa tự đăng nhập. Tiếp tục:
+
+```text
+LOGIN
+Username: user1
+Password:
+OK Login successful
+```
+
+Client dùng `termios` để ẩn hoàn toàn password khi nhập, giống terminal Ubuntu;
+không hiển thị dấu `*`. Nhập xong nhấn Enter. Client khôi phục echo sau khi nhập,
+ngắt kết nối, Ctrl+C hoặc Ctrl+D. Username hiển thị bình thường.
+
+- Chỉ guest được bắt đầu đăng ký hoặc đăng nhập; `LOGOUT` đưa kết nối về guest.
+- Username dài 1–31 byte, password dài 1–63 byte, không chứa khoảng trắng.
+- Dữ liệu không hợp lệ được báo lỗi và hỏi lại ở bước hiện tại.
+- Sai thông tin đăng nhập trả `ERROR Invalid username or password`; gõ `LOGIN` để thử lại.
+- Trạng thái nhập độc lập cho từng client; chờ nhập không chặn client khác.
+- Các dòng username/password trong luồng hỏi đáp không được ghi thành lệnh trong log.
+- Trong lúc đang được hỏi, dòng tiếp theo là dữ liệu cho trường đó, không phải lệnh.
+  Dùng Ctrl+D hoặc Ctrl+C để ngắt kết nối nếu muốn bỏ luồng nhập.
+- Dạng cũ `REGISTER <username> <password>` và `LOGIN <username> <password>` vẫn được hỗ trợ.
+- `nc` vẫn dùng được để thử giao thức, nhưng không tự ẩn password. Dùng `./client` để nhập password ẩn.
+- Tài khoản vẫn chỉ lưu trong RAM, sẽ mất khi restart server.
+
+Kiểm thử tích hợp (GCC, Python 3, Linux/WSL; không cần thư viện Python ngoài):
+
+```bash
+python3 tests/test_auth.py
+```
+
+Bộ test tự build server/client trong thư mục tạm, chọn cổng thử và kiểm tra cả TCP
+lẫn terminal giả lập. Kết quả kiểm tra ngày 16/11/2026: 8/8 test PASS,
+bao gồm retry username trùng, tranh chấp tên giữa hai client, kiểm tra dữ liệu,
+framing, guest-only, log không chứa password, ẩn password và khôi phục echo.
+
+## Kiểm tra server bằng netcat
 
 Mở Terminal 1 và chạy server:
 
@@ -295,7 +362,6 @@ Chi tiết nằm trong `TEST_COMMIT_5.md`.
 - Tài khoản và phòng chỉ lưu trong RAM, mất khi khởi động lại server.
 - Mật khẩu chưa được băm.
 - Chưa kiểm tra ký tự hợp lệ của username.
-- `QUIT` còn hai trường hợp biên: `QUIT extra` trả về lỗi nhưng vẫn đóng kết nối, còn `  QUIT` (có khoảng trắng đầu dòng) trả về `OK Goodbye` nhưng không đóng kết nối.
 - Chưa có lệnh xóa phòng.
 - Chưa giới hạn số người trong một phòng.
 - Người tạo phòng chưa tự động trở thành thành viên của phòng.

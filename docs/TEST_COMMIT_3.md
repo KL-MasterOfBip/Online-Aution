@@ -99,7 +99,7 @@ REGISTER user2 222222
 LOGIN user2 222222
 ```
 
-> Cả `REGISTER` và `LOGIN` đều bị từ chối với `ERROR Already logged in`. Chỉ guest mới được đăng ký. Sau `LOGOUT`, thử `REGISTER user2 222222`: phải nhận `OK Account registered`, xác nhận lần đăng ký bị chặn trước đó không tạo tài khoản.
+> `REGISTER` bị từ chối với `ERROR Cannot register while logged in`, `LOGIN` bị từ chối với `ERROR Already logged in`. Chỉ guest mới được đăng ký. Sau `LOGOUT`, thử `REGISTER user2 222222`: phải nhận `OK Account registered`, xác nhận lần đăng ký bị chặn trước đó không tạo tài khoản.
 
 Kết quả mong đợi của lệnh `LOGIN user2 222222`:
 
@@ -243,7 +243,7 @@ OK Login successful
 
 **Mục đích:** Kiểm tra `QUIT` đóng kết nối và giải phóng trạng thái đăng nhập.
 
-> **Lưu ý:** Trong bản `server.c` hiện tại, `QUIT extra` (có tham số thừa) trả về lỗi nhưng vẫn bị đóng kết nối, còn `  QUIT` (có khoảng trắng đầu dòng) trả về `OK Goodbye` nhưng không đóng. Nên sửa trước khi coi lệnh `QUIT` là hoàn chỉnh.
+> **Cập nhật 16/11/2026:** `QUIT extra` báo lỗi và giữ kết nối; `  QUIT` đóng kết nối bình thường. Trong bước nhập username/password, `QUIT` được coi là dữ liệu.
 
 ## 9. Test 9 – Username và password quá dài
 
@@ -347,6 +347,5 @@ Hoàn thiện đăng ký, đăng nhập, đăng xuất và quản lý phiên c�
 - Tài khoản lưu trong RAM, mất khi tắt server.
 - Mật khẩu chưa được băm, đang lưu dạng chữ thường trong bộ nhớ.
 - Chưa kiểm tra ký tự hợp lệ của username.
-- Lệnh `QUIT` còn hai trường hợp biên như ở Test 8.
 
 > **Lưu ý:** Đây là kế hoạch kiểm thử và kết quả mong đợi, chưa phải xác nhận 10 test đã chạy thành công trên máy của bạn. Chỉ đánh dấu Commit 3 hoàn thành sau khi bạn thực sự chạy và kiểm tra từng test.
