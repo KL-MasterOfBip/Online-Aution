@@ -26,6 +26,7 @@
 #define PASSWORD_SIZE 64
 
 #define MAX_ROOMS 100
+#define MAX_ROOMS_PER_USER 10
 #define ROOM_NAME_SIZE 50
 
 typedef enum {
@@ -260,11 +261,28 @@ void logout_user(int client_index) {
     send_message(client->socket_fd, "OK Logout successful\n");
 }
 
+/* Dem phong theo chu so huu, khong theo ket noi hay phong dang tham gia. */
+int count_owned_rooms(int user_index) {
+    int count = 0;
+    for (int i = 0; i < MAX_ROOMS; i++) {
+        if (rooms[i].is_active &&
+            strcmp(rooms[i].owner, users[user_index].username) == 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
 void create_room(int client_index, const char *room_name) {
     Client *client = &clients[client_index];
 
     if (client->user_index < 0) {
         send_message(client->socket_fd, "ERROR Not logged in\n");
+        return;
+    }
+
+    if (count_owned_rooms(client->user_index) >= MAX_ROOMS_PER_USER) {
+        send_message(client->socket_fd, "ERROR Room creation limit reached (maximum 10 rooms)\n");
         return;
     }
 
@@ -613,6 +631,10 @@ void handle_command(int client_index, char *command) {
         int creating = strcmp(tokens[0], "CREATE_ROOM") == 0;
         if (client->user_index < 0) {
             send_message(socket_fd, "ERROR Not logged in\n");
+            return;
+        }
+        if (creating && count_owned_rooms(client->user_index) >= MAX_ROOMS_PER_USER) {
+            send_message(socket_fd, "ERROR Room creation limit reached (maximum 10 rooms)\n");
             return;
         }
         if (!creating && client->current_room_id >= 0) {

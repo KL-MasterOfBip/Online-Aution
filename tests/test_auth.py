@@ -204,6 +204,43 @@ class AuthTests(unittest.TestCase):
         os.write(master, b'QUIT\n')
         self.assertEqual(process.wait(timeout=3), 0)
 
+    def test_room_creation_limit_per_account_survives_reconnect(self):
+        peer = self.connect()
+        user = self.name()
+        self.register(peer, user)
+        self.assertEqual(self.send(peer, f'LOGIN {user} secret-pass'), 'OK Login successful')
+        names = [self.name() for _ in range(10)]
+        for name in names[:9]:
+            self.assertTrue(self.send(peer, 'CREATE_ROOM ' + name).startswith('OK ROOM_CREATED'))
+        # Failed attempts do not use a room slot.
+        self.assertEqual(self.send(peer, 'CREATE_ROOM ' + names[0]), 'ERROR Room already exists')
+        self.assertEqual(self.send(peer, 'CREATE_ROOM'), 'Room name:')
+        self.assertTrue(self.send(peer, names[9]).startswith('OK ROOM_CREATED'))
+        error = 'ERROR Room creation limit reached (maximum 10 rooms)'
+        self.assertEqual(self.send(peer, 'CREATE_ROOM ' + self.name()), error)
+        self.assertEqual(self.send(peer, 'CREATE_ROOM'), error)
+        self.assertEqual(self.send(peer, 'LOGOUT'), 'OK Logout successful')
+        self.assertEqual(self.send(peer, 'QUIT'), 'OK Goodbye')
+        self.assertEqual(peer[1].readline(), b'')
+        again = self.connect()
+        self.assertEqual(self.send(again, f'LOGIN {user} secret-pass'), 'OK Login successful')
+        self.assertEqual(self.send(again, 'CREATE_ROOM'), error)
+        # Another account has its own allowance.
+        other = self.connect()
+        user2 = self.name()
+        self.register(other, user2)
+        self.assertEqual(self.send(other, f'LOGIN {user2} secret-pass'), 'OK Login successful')
+        self.assertTrue(self.send(other, 'CREATE_ROOM ' + self.name()).startswith('OK ROOM_CREATED'))
+        self.assertEqual(self.send(again, 'LIST_ROOMS'), 'OK ROOM_LIST')
+        owned = []
+        while True:
+            line = again[1].readline().decode().strip()
+            if line == 'END_ROOM_LIST':
+                break
+            if ('OWNER ' + user + ' MEMBERS') in line:
+                owned.append(line)
+        self.assertEqual(len(owned), 10)
+
     def start_terminal(self):
         master, slave = pty.openpty()
         process = subprocess.Popen([str(self.work / 'client'), '127.0.0.1', str(self.port)],

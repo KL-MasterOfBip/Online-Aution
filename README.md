@@ -216,6 +216,10 @@ Room ID: 1
 OK JOINED_ROOM Phong1
 ```
 
+Mỗi tài khoản được tạo tối đa 10 phòng. Đủ 10 phòng sẽ nhận
+`ERROR Room creation limit reached (maximum 10 rooms)`. Đăng xuất hay kết nối lại
+không làm đặt lại giới hạn; số phòng được đếm theo chủ sở hữu.
+
 Tên phòng giữ giới hạn 1–49 byte, không có khoảng trắng. Tên trùng hoặc dữ liệu
 không hợp lệ sẽ báo lỗi rồi hỏi lại. JOIN_ROOM vẫn tra cứu bằng ID, phản hồi thành
 công hiển thị tên phòng. Client hiển thị các bước nhập này bình thường, không ẩn.
