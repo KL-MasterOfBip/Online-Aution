@@ -99,7 +99,7 @@ REGISTER user2 222222
 LOGIN user2 222222
 ```
 
-> `REGISTER` sẽ thành công (`OK Account registered`) vì chỉ có `LOGIN` bị chặn khi đã đăng nhập.
+> Cả `REGISTER` và `LOGIN` đều bị từ chối với `ERROR Already logged in`. Chỉ guest mới được đăng ký. Sau `LOGOUT`, thử `REGISTER user2 222222`: phải nhận `OK Account registered`, xác nhận lần đăng ký bị chặn trước đó không tạo tài khoản.
 
 Kết quả mong đợi của lệnh `LOGIN user2 222222`:
 

@@ -28,7 +28,7 @@ Dự án đã hoàn thành phần nền tảng TCP Server, xử lý giao thức 
 
 ### Commit 3 – Account Registration & Login
 
-- Đăng ký tài khoản bằng lệnh `REGISTER`.
+- Đăng ký tài khoản bằng lệnh `REGISTER`, chỉ dành cho guest (kết nối chưa đăng nhập). Sau `LOGOUT` có thể đăng ký lại.
 - Đăng nhập bằng lệnh `LOGIN` và đăng xuất bằng lệnh `LOGOUT`.
 - Mỗi kết nối client có một phiên đăng nhập riêng.
 - Mỗi client chỉ được đăng nhập một tài khoản tại một thời điểm.
@@ -94,7 +94,7 @@ Ví dụ nội dung file log (thời gian chỉ minh họa định dạng):
 | Username đã tồn tại | `ERROR Username already exists` |
 | Username hoặc password quá dài | `ERROR Username or password is too long` |
 | Sai username hoặc password | `ERROR Invalid username or password` |
-| Client đã đăng nhập mà gửi `LOGIN` | `ERROR Already logged in` |
+| Client đã đăng nhập mà gửi `LOGIN` hoặc `REGISTER` | `ERROR Already logged in` |
 | Tài khoản đang đăng nhập ở kết nối khác | `ERROR Account already logged in` |
 | `LOGOUT`, `CREATE_ROOM`, `JOIN_ROOM`, `LEAVE_ROOM` khi chưa đăng nhập | `ERROR Not logged in` |
 | Tên phòng đã tồn tại | `ERROR Room already exists` |

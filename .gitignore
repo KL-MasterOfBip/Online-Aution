@@ -2,3 +2,6 @@ server
 *.o
 *.log
 coverage/
+
+# Local course reference material
+/docs/IT4062_ThuchanhLapTrinhMang_LectureNotes_1.pdf

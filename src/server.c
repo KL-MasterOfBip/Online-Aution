@@ -159,9 +159,18 @@ void remove_client_from_room(int client_index) {
     client->current_room_id = -1;
 }
 
-void register_user(int socket_fd,
+void register_user(int client_index,
                    const char *username,
                    const char *password) {
+    Client *client = &clients[client_index];
+    int socket_fd = client->socket_fd;
+
+    /* Chi guest moi duoc dang ky tai khoan. */
+    if (client->user_index >= 0) {
+        send_message(socket_fd, "ERROR Cannot register while logged in\n");
+        return;
+    }
+
     if (find_user(username) >= 0) {
         send_message(socket_fd, "ERROR Username already exists\n");
         return;
@@ -427,7 +436,7 @@ void handle_command(int client_index, char *command) {
             return;
         }
 
-        register_user(socket_fd, tokens[1], tokens[2]);
+        register_user(client_index, tokens[1], tokens[2]);
     }
     else if (strcmp(tokens[0], "LOGIN") == 0 && count == 3) {
         size_t username_length = strlen(tokens[1]);
