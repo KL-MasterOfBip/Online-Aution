@@ -42,8 +42,8 @@ int send_all(int socket_fd, const char *data, int length) {
     return total;
 }
 
-void send_message(int socket_fd, const char *message) {
-    send_all(socket_fd, message, strlen(message));
+int send_message(int socket_fd, const char *message) {
+    return send_all(socket_fd, message, strlen(message));
 }
 
 void handle_command(int socket_fd, char *command) {
