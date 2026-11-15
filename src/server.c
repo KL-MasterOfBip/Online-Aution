@@ -20,11 +20,15 @@
 #define USERNAME_SIZE 32
 #define PASSWORD_SIZE 64
 
+#define MAX_ROOMS 100
+#define ROOM_NAME_SIZE 50
+
 typedef struct {
     int socket_fd;
     char buffer[BUFFER_SIZE];
     int length;
-    int user_index; /* -1: client chua dang nhap */
+    int user_index;       /* -1: client chua dang nhap */
+    int current_room_id;  /* -1: client chua tham gia phong nao */
 } Client;
 
 typedef struct {
@@ -34,15 +38,26 @@ typedef struct {
     int client_fd;
 } User;
 
+typedef struct {
+    int room_id;
+    char room_name[ROOM_NAME_SIZE];
+    char owner[USERNAME_SIZE];
+    int member_count;
+    int is_active;
+} AuctionRoom;
+
 Client clients[MAX_CLIENTS];
 User users[MAX_USERS];
+AuctionRoom rooms[MAX_ROOMS];
 int user_count = 0;
+int next_room_id = 1;
 
 int send_all(int socket_fd, const char *data, int length) {
     int total = 0;
 
     while (total < length) {
-        int sent = send(socket_fd, data + total, (size_t)(length - total), 0);
+        int sent = (int)send(socket_fd, data + total,
+                             (size_t)(length - total), 0);
 
         if (sent <= 0) {
             if (sent < 0 && errno == EINTR) {
@@ -71,6 +86,44 @@ int find_user(const char *username) {
     return -1;
 }
 
+int find_room_by_id(int room_id) {
+    for (int i = 0; i < MAX_ROOMS; i++) {
+        if (rooms[i].is_active && rooms[i].room_id == room_id) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+int find_room_by_name(const char *room_name) {
+    for (int i = 0; i < MAX_ROOMS; i++) {
+        if (rooms[i].is_active &&
+            strcmp(rooms[i].room_name, room_name) == 0) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+/* Cap nhat so thanh vien va trang thai phong cua client. */
+void remove_client_from_room(int client_index) {
+    Client *client = &clients[client_index];
+
+    if (client->current_room_id < 0) {
+        return;
+    }
+
+    int room_index = find_room_by_id(client->current_room_id);
+
+    if (room_index >= 0 && rooms[room_index].member_count > 0) {
+        rooms[room_index].member_count--;
+    }
+
+    client->current_room_id = -1;
+}
+
 void register_user(int socket_fd,
                    const char *username,
                    const char *password) {
@@ -85,13 +138,10 @@ void register_user(int socket_fd,
     }
 
     User *user = &users[user_count];
-
     snprintf(user->username, sizeof(user->username), "%s", username);
     snprintf(user->password, sizeof(user->password), "%s", password);
-
     user->is_logged_in = 0;
     user->client_fd = -1;
-
     user_count++;
 
     send_message(socket_fd, "OK Account registered\n");
@@ -108,12 +158,14 @@ void login_user(int client_index, const char *username, const char *password) {
     int index = find_user(username);
 
     if (index < 0 || strcmp(users[index].password, password) != 0) {
-        send_message(client->socket_fd, "ERROR Invalid username or password\n");
+        send_message(client->socket_fd,
+                     "ERROR Invalid username or password\n");
         return;
     }
 
     if (users[index].is_logged_in) {
-        send_message(client->socket_fd, "ERROR Account already logged in\n");
+        send_message(client->socket_fd,
+                     "ERROR Account already logged in\n");
         return;
     }
 
@@ -132,6 +184,9 @@ void logout_user(int client_index) {
         return;
     }
 
+    /* Dang xuat dong thoi roi khoi phong neu dang tham gia. */
+    remove_client_from_room(client_index);
+
     int index = client->user_index;
 
     if (index < user_count) {
@@ -140,8 +195,119 @@ void logout_user(int client_index) {
     }
 
     client->user_index = -1;
-
     send_message(client->socket_fd, "OK Logout successful\n");
+}
+
+void create_room(int client_index, const char *room_name) {
+    Client *client = &clients[client_index];
+
+    if (client->user_index < 0) {
+        send_message(client->socket_fd, "ERROR Not logged in\n");
+        return;
+    }
+
+    if (find_room_by_name(room_name) >= 0) {
+        send_message(client->socket_fd, "ERROR Room already exists\n");
+        return;
+    }
+
+    int slot = -1;
+    for (int i = 0; i < MAX_ROOMS; i++) {
+        if (!rooms[i].is_active) {
+            slot = i;
+            break;
+        }
+    }
+
+    if (slot < 0) {
+        send_message(client->socket_fd, "ERROR Room database is full\n");
+        return;
+    }
+
+    AuctionRoom *room = &rooms[slot];
+    room->room_id = next_room_id++;
+    snprintf(room->room_name, sizeof(room->room_name), "%s", room_name);
+    snprintf(room->owner, sizeof(room->owner), "%s",
+             users[client->user_index].username);
+    room->member_count = 0;
+    room->is_active = 1;
+
+    char response[128];
+    snprintf(response, sizeof(response), "OK ROOM_CREATED %d\n", room->room_id);
+    send_message(client->socket_fd, response);
+}
+
+void list_rooms(int client_index) {
+    int socket_fd = clients[client_index].socket_fd;
+    int room_count = 0;
+
+    send_message(socket_fd, "OK ROOM_LIST\n");
+
+    for (int i = 0; i < MAX_ROOMS; i++) {
+        if (rooms[i].is_active) {
+            char response[160];
+            snprintf(response, sizeof(response),
+                     "ROOM %d %s OWNER %s MEMBERS %d\n",
+                     rooms[i].room_id,
+                     rooms[i].room_name,
+                     rooms[i].owner,
+                     rooms[i].member_count);
+            if (send_message(socket_fd, response) < 0) {
+                return;
+            }
+            room_count++;
+        }
+    }
+
+    if (room_count == 0) {
+        send_message(socket_fd, "NO_ROOMS\n");
+    }
+
+    send_message(socket_fd, "END_ROOM_LIST\n");
+}
+
+void join_room(int client_index, int room_id) {
+    Client *client = &clients[client_index];
+
+    if (client->user_index < 0) {
+        send_message(client->socket_fd, "ERROR Not logged in\n");
+        return;
+    }
+
+    if (client->current_room_id >= 0) {
+        send_message(client->socket_fd, "ERROR Already in a room\n");
+        return;
+    }
+
+    int room_index = find_room_by_id(room_id);
+    if (room_index < 0) {
+        send_message(client->socket_fd, "ERROR Room not found\n");
+        return;
+    }
+
+    client->current_room_id = room_id;
+    rooms[room_index].member_count++;
+
+    char response[128];
+    snprintf(response, sizeof(response), "OK JOINED_ROOM %d\n", room_id);
+    send_message(client->socket_fd, response);
+}
+
+void leave_room(int client_index) {
+    Client *client = &clients[client_index];
+
+    if (client->user_index < 0) {
+        send_message(client->socket_fd, "ERROR Not logged in\n");
+        return;
+    }
+
+    if (client->current_room_id < 0) {
+        send_message(client->socket_fd, "ERROR Not in a room\n");
+        return;
+    }
+
+    remove_client_from_room(client_index);
+    send_message(client->socket_fd, "OK LEFT_ROOM\n");
 }
 
 int split_tokens(char *command, char *tokens[], int max_tokens) {
@@ -195,7 +361,8 @@ void handle_command(int client_index, char *command) {
     }
     else if (strcmp(tokens[0], "HELP") == 0 && count == 1) {
         send_message(socket_fd,
-            "OK Commands: HELP, PING, REGISTER, LOGIN, LOGOUT, QUIT\n");
+            "OK Commands: HELP, PING, REGISTER, LOGIN, LOGOUT, "
+            "CREATE_ROOM, LIST_ROOMS, JOIN_ROOM, LEAVE_ROOM, QUIT\n");
     }
     else if (strcmp(tokens[0], "REGISTER") == 0 && count == 3) {
         size_t username_length = strlen(tokens[1]);
@@ -203,7 +370,8 @@ void handle_command(int client_index, char *command) {
 
         if (username_length == 0 || username_length >= USERNAME_SIZE ||
             password_length == 0 || password_length >= PASSWORD_SIZE) {
-            send_message(socket_fd, "ERROR Username or password is too long or too short\n");
+            send_message(socket_fd,
+                         "ERROR Username or password is too long or too short\n");
             return;
         }
 
@@ -215,7 +383,8 @@ void handle_command(int client_index, char *command) {
 
         if (username_length == 0 || username_length >= USERNAME_SIZE ||
             password_length == 0 || password_length >= PASSWORD_SIZE) {
-            send_message(socket_fd, "ERROR Username or password is too long or too short\n");
+            send_message(socket_fd,
+                         "ERROR Username or password is too long or too short\n");
             return;
         }
 
@@ -223,6 +392,32 @@ void handle_command(int client_index, char *command) {
     }
     else if (strcmp(tokens[0], "LOGOUT") == 0 && count == 1) {
         logout_user(client_index);
+    }
+    else if (strcmp(tokens[0], "CREATE_ROOM") == 0 && count == 2) {
+        if (strlen(tokens[1]) >= ROOM_NAME_SIZE) {
+            send_message(socket_fd, "ERROR Room name is too long\n");
+            return;
+        }
+        create_room(client_index, tokens[1]);
+    }
+    else if (strcmp(tokens[0], "LIST_ROOMS") == 0 && count == 1) {
+        list_rooms(client_index);
+    }
+    else if (strcmp(tokens[0], "JOIN_ROOM") == 0 && count == 2) {
+        char *end = NULL;
+        errno = 0;
+        long room_id = strtol(tokens[1], &end, 10);
+
+        if (errno != 0 || tokens[1][0] == '\0' || *end != '\0' ||
+            room_id <= 0 || room_id > 2147483647L) {
+            send_message(socket_fd, "ERROR Invalid room ID\n");
+            return;
+        }
+
+        join_room(client_index, (int)room_id);
+    }
+    else if (strcmp(tokens[0], "LEAVE_ROOM") == 0 && count == 1) {
+        leave_room(client_index);
     }
     else if (strcmp(tokens[0], "QUIT") == 0 && count == 1) {
         send_message(socket_fd, "OK Goodbye\n");
@@ -232,6 +427,10 @@ void handle_command(int client_index, char *command) {
              strcmp(tokens[0], "REGISTER") == 0 ||
              strcmp(tokens[0], "LOGIN") == 0 ||
              strcmp(tokens[0], "LOGOUT") == 0 ||
+             strcmp(tokens[0], "CREATE_ROOM") == 0 ||
+             strcmp(tokens[0], "LIST_ROOMS") == 0 ||
+             strcmp(tokens[0], "JOIN_ROOM") == 0 ||
+             strcmp(tokens[0], "LEAVE_ROOM") == 0 ||
              strcmp(tokens[0], "QUIT") == 0) {
         send_message(socket_fd, "ERROR Invalid command or arguments\n");
     }
@@ -246,7 +445,9 @@ void close_client(int index) {
     if (clients[index].socket_fd >= 0) {
         int user_index = clients[index].user_index;
 
-        /* Tu dong dang xuat neu client mat ket noi */
+        /* Neu mat ket noi, tu dong roi phong va dang xuat. */
+        remove_client_from_room(index);
+
         if (user_index >= 0 && user_index < user_count) {
             users[user_index].is_logged_in = 0;
             users[user_index].client_fd = -1;
@@ -256,6 +457,7 @@ void close_client(int index) {
         clients[index].socket_fd = -1;
         clients[index].length = 0;
         clients[index].user_index = -1;
+        clients[index].current_room_id = -1;
     }
 }
 
@@ -270,7 +472,10 @@ int main(void) {
         clients[i].socket_fd = -1;
         clients[i].length = 0;
         clients[i].user_index = -1;
+        clients[i].current_room_id = -1;
     }
+
+    memset(rooms, 0, sizeof(rooms));
 
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
@@ -314,7 +519,6 @@ int main(void) {
 
         for (int i = 0; i < MAX_CLIENTS; i++) {
             int client_fd = clients[i].socket_fd;
-
             if (client_fd >= 0) {
                 FD_SET(client_fd, &read_fds);
                 if (client_fd > max_fd) {
@@ -324,7 +528,6 @@ int main(void) {
         }
 
         int activity = select(max_fd + 1, &read_fds, NULL, NULL, NULL);
-
         if (activity < 0) {
             if (errno == EINTR) {
                 continue;
@@ -349,10 +552,10 @@ int main(void) {
                         clients[i].socket_fd = client_fd;
                         clients[i].length = 0;
                         clients[i].user_index = -1;
+                        clients[i].current_room_id = -1;
 
                         send_message(client_fd,
                                      "OK Connected to auction server\n");
-
                         added = 1;
                         printf("Client connected: %d\n", client_fd);
                         break;
