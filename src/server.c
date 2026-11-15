@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,8 +11,12 @@
 #include <sys/select.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <stdarg.h>
+#include <time.h>
 
+#ifndef PORT
 #define PORT 8080
+#endif
 #define MAX_CLIENTS FD_SETSIZE
 #define BUFFER_SIZE 1024
 #define RESPONSE_SIZE 2048
@@ -51,6 +56,36 @@ User users[MAX_USERS];
 AuctionRoom rooms[MAX_ROOMS];
 int user_count = 0;
 int next_room_id = 1;
+
+#define LOG_FILE "auction_server.log"
+
+/* Ghi log co timestamp; tuyet doi khong ghi password vao file log. */
+void log_event(const char *format, ...) {
+    FILE *log_file = fopen(LOG_FILE, "a");
+    if (log_file == NULL) {
+        perror("Cannot open log file");
+        return;
+    }
+
+    time_t now = time(NULL);
+    struct tm time_info;
+    char timestamp[32] = "unknown-time";
+
+    if (localtime_r(&now, &time_info) != NULL) {
+        strftime(timestamp, sizeof(timestamp), "%Y-%m-%d %H:%M:%S",
+                 &time_info);
+    }
+
+    fprintf(log_file, "[%s] ", timestamp);
+
+    va_list args;
+    va_start(args, format);
+    vfprintf(log_file, format, args);
+    va_end(args);
+
+    fputc('\n', log_file);
+    fclose(log_file);
+}
 
 int send_all(int socket_fd, const char *data, int length) {
     int total = 0;
@@ -144,6 +179,7 @@ void register_user(int socket_fd,
     user->client_fd = -1;
     user_count++;
 
+    log_event("REGISTER_SUCCESS username=%s", username);
     send_message(socket_fd, "OK Account registered\n");
 }
 
@@ -173,6 +209,7 @@ void login_user(int client_index, const char *username, const char *password) {
     users[index].client_fd = client->socket_fd;
     client->user_index = index;
 
+    log_event("LOGIN_SUCCESS username=%s fd=%d", username, client->socket_fd);
     send_message(client->socket_fd, "OK Login successful\n");
 }
 
@@ -185,7 +222,11 @@ void logout_user(int client_index) {
     }
 
     /* Dang xuat dong thoi roi khoi phong neu dang tham gia. */
+    const char *username = users[client->user_index].username;
+    int old_room_id = client->current_room_id;
     remove_client_from_room(client_index);
+    log_event("LOGOUT username=%s fd=%d previous_room=%d",
+              username, client->socket_fd, old_room_id);
 
     int index = client->user_index;
 
@@ -231,6 +272,9 @@ void create_room(int client_index, const char *room_name) {
              users[client->user_index].username);
     room->member_count = 0;
     room->is_active = 1;
+
+    log_event("ROOM_CREATED id=%d name=%s owner=%s",
+              room->room_id, room->room_name, room->owner);
 
     char response[128];
     snprintf(response, sizeof(response), "OK ROOM_CREATED %d\n", room->room_id);
@@ -288,6 +332,10 @@ void join_room(int client_index, int room_id) {
     client->current_room_id = room_id;
     rooms[room_index].member_count++;
 
+    log_event("ROOM_JOIN username=%s fd=%d room_id=%d members=%d",
+              users[client->user_index].username, client->socket_fd,
+              room_id, rooms[room_index].member_count);
+
     char response[128];
     snprintf(response, sizeof(response), "OK JOINED_ROOM %d\n", room_id);
     send_message(client->socket_fd, response);
@@ -306,7 +354,11 @@ void leave_room(int client_index) {
         return;
     }
 
+    int old_room_id = client->current_room_id;
+    const char *username = users[client->user_index].username;
     remove_client_from_room(client_index);
+    log_event("ROOM_LEAVE username=%s fd=%d room_id=%d",
+              username, client->socket_fd, old_room_id);
     send_message(client->socket_fd, "OK LEFT_ROOM\n");
 }
 
@@ -435,6 +487,7 @@ void handle_command(int client_index, char *command) {
         send_message(socket_fd, "ERROR Invalid command or arguments\n");
     }
     else {
+        log_event("UNKNOWN_COMMAND fd=%d command=%s", socket_fd, tokens[0]);
         snprintf(response, sizeof(response),
                  "ERROR Unknown command: %s\n", tokens[0]);
         send_message(socket_fd, response);
@@ -446,6 +499,11 @@ void close_client(int index) {
         int user_index = clients[index].user_index;
 
         /* Neu mat ket noi, tu dong roi phong va dang xuat. */
+        const char *username = (user_index >= 0 && user_index < user_count)
+                                   ? users[user_index].username : "guest";
+        int old_room_id = clients[index].current_room_id;
+        log_event("CLIENT_DISCONNECTED fd=%d user=%s room_id=%d",
+                  clients[index].socket_fd, username, old_room_id);
         remove_client_from_room(index);
 
         if (user_index >= 0 && user_index < user_count) {
@@ -509,6 +567,7 @@ int main(void) {
     }
 
     printf("Auction server is running on port %d\n", PORT);
+    log_event("SERVER_START port=%d", PORT);
 
     while (1) {
         fd_set read_fds;
@@ -558,6 +617,7 @@ int main(void) {
                                      "OK Connected to auction server\n");
                         added = 1;
                         printf("Client connected: %d\n", client_fd);
+                        log_event("CLIENT_CONNECTED fd=%d", client_fd);
                         break;
                     }
                 }
@@ -590,6 +650,18 @@ int main(void) {
 
                 if (ch == '\n') {
                     clients[i].buffer[clients[i].length] = '\0';
+                    char command_name[32] = {0};
+                    size_t command_pos = 0;
+                    while (clients[i].buffer[command_pos] != '\0' &&
+                           !isspace((unsigned char)clients[i].buffer[command_pos]) &&
+                           command_pos < sizeof(command_name) - 1) {
+                        command_name[command_pos] = clients[i].buffer[command_pos];
+                        command_pos++;
+                    }
+                    if (command_name[0] != '\0') {
+                        log_event("COMMAND_RECEIVED fd=%d command=%s",
+                                  client_fd, command_name);
+                    }
                     handle_command(i, clients[i].buffer);
 
                     int should_close =
@@ -618,6 +690,7 @@ int main(void) {
         close_client(i);
     }
 
+    log_event("SERVER_STOP");
     close(server_fd);
     return 0;
 }

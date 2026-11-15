@@ -4,7 +4,7 @@
 
 ## Trạng thái hiện tại
 
-Dự án đã hoàn thành phần nền tảng TCP Server, xử lý giao thức lệnh theo dòng (Commit 2), quản lý tài khoản, phiên đăng nhập (Commit 3) và quản lý phòng đấu giá (Commit 4).
+Dự án đã hoàn thành phần nền tảng TCP Server, xử lý giao thức lệnh theo dòng (Commit 2), quản lý tài khoản, phiên đăng nhập (Commit 3) quản lý phòng đấu giá (Commit 4) và ghi nhật ký hoạt động cùng bộ kiểm thử tự động (Commit 5).
 
 ### Commit 1 – TCP Server nền tảng
 
@@ -48,6 +48,25 @@ Dự án đã hoàn thành phần nền tảng TCP Server, xử lý giao thức 
 - Mỗi tài khoản chỉ được ở trong một phòng tại một thời điểm.
 - Server tự động cập nhật số thành viên khi người dùng rời phòng, đăng xuất, gửi `QUIT` hoặc mất kết nối.
 - Kiểm tra ID phòng và số lượng tham số ở phía server.
+
+### Commit 5 – Activity Logger & Basic Tests
+
+- Server ghi các sự kiện quan trọng vào file `auction_server.log` (tạo tại thư mục làm việc khi chạy server), mỗi dòng có thời gian.
+- Các sự kiện được ghi: `SERVER_START`, `SERVER_STOP`, `CLIENT_CONNECTED`, `CLIENT_DISCONNECTED`, `COMMAND_RECEIVED`, `REGISTER_SUCCESS`, `LOGIN_SUCCESS`, `LOGOUT`, `ROOM_CREATED`, `ROOM_JOIN`, `ROOM_LEAVE`, `UNKNOWN_COMMAND`.
+- `COMMAND_RECEIVED` chỉ ghi tên lệnh, không ghi toàn bộ nội dung lệnh.
+- Logger **không ghi mật khẩu**: `REGISTER` và `LOGIN` chỉ được ghi theo tên lệnh.
+- Bổ sung bộ kiểm thử tự động `test_commit5.py` (chỉ dùng thư viện chuẩn Python) cho các luồng chính: kết nối TCP, giao thức lệnh, tài khoản, phòng và logger.
+
+Ví dụ nội dung file log (thời gian chỉ minh họa định dạng):
+
+```text
+[2026-11-15 10:20:30] SERVER_START port=8080
+[2026-11-15 10:20:35] CLIENT_CONNECTED fd=4
+[2026-11-15 10:20:40] REGISTER_SUCCESS username=khanh
+[2026-11-15 10:20:45] LOGIN_SUCCESS username=khanh fd=4
+[2026-11-15 10:20:50] ROOM_CREATED id=1 name=RoomA owner=khanh
+[2026-11-15 10:20:55] ROOM_JOIN username=khanh fd=4 room_id=1 members=1
+```
 
 ### Các lệnh hiện có
 
@@ -161,6 +180,30 @@ QUIT
 
 Có thể mở nhiều terminal để tạo nhiều kết nối client đồng thời. Ví dụ, mở Terminal 3 và thử `LOGIN khanh 123456` trong khi Terminal 2 đang đăng nhập cùng tài khoản; server phải từ chối. Với phòng, thử `JOIN_ROOM 2` khi đang ở phòng 1; server phải trả về `ERROR Already in a room`.
 
+## Xem log
+
+Sau khi server chạy và có client thao tác, xem log bằng:
+
+```bash
+cat auction_server.log
+```
+
+Theo dõi log liên tục:
+
+```bash
+tail -f auction_server.log
+```
+
+## Chạy bộ kiểm thử tự động
+
+Yêu cầu: GCC và Python 3.
+
+```bash
+python3 test_commit5.py
+```
+
+Script tự biên dịch server với cổng kiểm thử `18080` (để tránh xung đột với cổng `8080`), khởi chạy server, tạo các client TCP, chạy các test và in kết quả PASS/FAIL. File log của lần kiểm thử được đặt trong thư mục tạm và tự dọn sau khi chạy. Mã mặc định vẫn dùng cổng `8080`.
+
 ## Các trường hợp kiểm thử Commit 2
 
 | Test | Nội dung | Kết quả |
@@ -217,6 +260,25 @@ Chi tiết từng bước nằm trong `TEST_COMMIT_4.md`.
 
 **Trạng thái kiểm thử:** Mới chạy smoke test cho chuỗi `REGISTER` → `LOGIN` → `CREATE_ROOM` → `LIST_ROOMS` → `JOIN_ROOM` → `JOIN_ROOM` (bị từ chối) → `LEAVE_ROOM` → `LOGOUT` → `QUIT`. Các test còn lại chưa chạy; chỉ chuyển sang "Đạt" sau khi thực thi và quan sát đúng kết quả.
 
+## Các trường hợp kiểm thử Commit 5
+
+| Nhóm kiểm thử | Nội dung | Kết quả |
+| --- | --- | --- |
+| Kết nối TCP | Kết nối client tới server | PASS |
+| Giao thức | `PING`, `HELP`, nhiều lệnh trong một lần gửi | PASS |
+| Tham số | Thiếu tham số, ID không hợp lệ, tên phòng quá dài | PASS |
+| Tài khoản | `REGISTER`, `LOGIN` và nhiều tài khoản | PASS |
+| Quản lý phòng | Tạo phòng, trùng tên, tham gia, rời phòng, liệt kê | PASS |
+| Ràng buộc thành viên | Không cho một client tham gia hai phòng | PASS |
+| Xác thực | Chặn thao tác phòng khi chưa đăng nhập | PASS |
+| Dọn trạng thái | `LOGOUT` hoặc ngắt kết nối tự động rời phòng | PASS |
+| Logger | Ghi sự kiện máy chủ, tài khoản, phòng, lệnh | PASS |
+| Bảo mật log | Không lưu mật khẩu trong file log | PASS |
+
+Chi tiết nằm trong `TEST_COMMIT_5.md`.
+
+**Trạng thái kiểm thử:** Theo `TEST_COMMIT_5.md`, bộ kiểm thử tích hợp đã chạy với kết quả **37/37 test PASS**, biên dịch không có cảnh báo với `-Wall -Wextra` (và `-std=c11 -Wall -Wextra -Wpedantic` trong script test). Bộ test tự động chỉ kiểm tra các luồng chính, chưa thay thế kiểm thử tải hoặc kiểm thử bảo mật chuyên sâu.
+
 ## Quy ước giao thức
 
 - Client gửi mỗi lệnh trên một dòng.
@@ -237,13 +299,16 @@ Chi tiết từng bước nằm trong `TEST_COMMIT_4.md`.
 - Chưa có lệnh xóa phòng.
 - Chưa giới hạn số người trong một phòng.
 - Người tạo phòng chưa tự động trở thành thành viên của phòng.
-- Chưa có vật phẩm, đặt giá, ghi log và unit test.
+- Chưa có vật phẩm, đặt giá và mua ngay.
+- Chưa có unit test đo độ phủ (coverage) và chưa có kiểm thử tải; bộ test hiện tại là kiểm thử tích hợp.
+- Logger mở file theo từng sự kiện, phù hợp quy mô bài tập, chưa phải hệ thống logging tải cao.
 - Server xử lý một luồng trong vòng lặp `select()`; nếu chuyển sang đa luồng cần đồng bộ dữ liệu dùng chung.
 
 ## Các chức năng dự kiến phát triển tiếp
 
 Các chức năng nghiệp vụ của ứng dụng đấu giá sẽ được triển khai trong những commit tiếp theo, bao gồm:
 
-- Commit 5: ghi log hoạt động, unit test cho các phần đã có, cập nhật tài liệu.
-- Quản lý vật phẩm đấu giá.
+- Quản lý vật phẩm đấu giá (tạo, liệt kê, rút vật phẩm chưa mở phiên).
 - Đặt giá và cập nhật trạng thái phiên đấu giá.
+- Mua ngay và bộ đếm 3 phút kèm thông báo.
+- Lưu trữ dữ liệu bền vững, unit test đạt coverage trên 90% và kiểm thử tải.
