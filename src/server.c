@@ -298,7 +298,7 @@ void create_room(int client_index, const char *room_name) {
               room->room_id, room->room_name, room->owner);
 
     char response[128];
-    snprintf(response, sizeof(response), "OK ROOM_CREATED ID:  %d\n", room->room_id);
+    snprintf(response, sizeof(response), "OK ROOM_CREATED ID: %d\n", room->room_id);
     send_message(client->socket_fd, response);
 }
 
